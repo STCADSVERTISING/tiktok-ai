@@ -1,5 +1,6 @@
 // /pages/api/fal-status.js
-import { fal } from "@fal-ai/serverless-client";
+- import { fal } from "@fal-ai/serverless-client";
++ import fal from "@fal-ai/serverless-client";
 
 export default async function handler(req, res) {
   const { id } = req.query || {};
