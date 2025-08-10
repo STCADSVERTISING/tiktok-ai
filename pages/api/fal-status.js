@@ -1,3 +1,14 @@
+// /pages/api/fal-status.js
+async function readJsonSafe(res) {
+  const ct = res.headers.get("content-type") || "";
+  const text = await res.text();
+  if (ct.includes("application/json")) {
+    try { return { json: JSON.parse(text), text, ct, ok: true }; }
+    catch (e) { return { json: null, text, ct, ok: false, parseErr: e.message }; }
+  }
+  return { json: null, text, ct, ok: false };
+}
+
 export default async function handler(req, res) {
   try {
     const { id } = req.query || {};
@@ -7,29 +18,44 @@ export default async function handler(req, res) {
     const key = process.env.FAL_API_KEY;
     if (!key) return res.status(500).json({ error: "Missing FAL_API_KEY" });
 
-    // 1) เช็กสถานะ
-    const st = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}/status`, {
-      headers: { "Authorization": `Key ${key}` }
-    }).then(r => r.json());
+    // 1) สถานะ
+    const stRes = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}/status`, {
+      headers: { "Authorization": `Key ${key}`, "Accept": "application/json" }
+    });
+    const st = await readJsonSafe(stRes);
+    if (!stRes.ok) {
+      console.error("[STATUS] HTTP", stRes.status, st.ct, st.text?.slice(0,200));
+      return res.status(500).json({ error: `Fal status ${stRes.status}: ${st.text}` });
+    }
 
-    if (st?.status === "COMPLETED") {
-      // 2) ดึงผลลัพธ์จริง
-      const rr = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}`, {
-        headers: { "Authorization": `Key ${key}` }
-      }).then(r => r.json());
-
-      const resp = rr?.response || rr;
+    if (st.json?.status === "COMPLETED") {
+      // 2) ผลลัพธ์จริง
+      const rrRes = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}`, {
+        headers: { "Authorization": `Key ${key}`, "Accept": "application/json" }
+      });
+      const rr = await readJsonSafe(rrRes);
+      if (!rrRes.ok) {
+        console.error("[STATUS] result HTTP", rrRes.status, rr.ct, rr.text?.slice(0,200));
+        return res.status(500).json({ error: `Fal result ${rrRes.status}: ${rr.text}` });
+      }
+      const resp = rr.json?.response || rr.json;
       const url =
-        resp?.video?.url || resp?.output?.video?.url || resp?.data?.video?.url || null; // ตาม schema ของ Hunyuan มี video.url :contentReference[oaicite:3]{index=3}
+        resp?.video?.url ||
+        resp?.output?.video?.url ||
+        resp?.data?.video?.url ||
+        null;
 
-      if (!url) return res.status(500).json({ done: true, error: "No video url in response" });
+      if (!url) {
+        console.error("[STATUS] no video url", rr.json);
+        return res.status(500).json({ done: true, error: "No video url in response" });
+      }
       return res.json({ done: true, url });
     }
 
-    if (st?.status === "FAILED") return res.status(500).json({ done: true, error: st?.error || "Fal job failed" });
-    return res.json({ done: false, status: st?.status || "PENDING" });
+    if (st.json?.status === "FAILED") return res.status(500).json({ done: true, error: st.json?.error || "Fal job failed" });
+    return res.json({ done: false, status: st.json?.status || "PENDING" });
   } catch (e) {
-    console.error("STATUS ERR:", e);
+    console.error("[STATUS ERR]", e);
     return res.status(500).json({ error: e?.message || "status failed" });
   }
 }
