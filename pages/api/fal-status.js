@@ -12,15 +12,16 @@ async function readJsonSafe(res) {
 export default async function handler(req, res) {
   try {
     const { id } = req.query || {};
-    if (!id) return res.status(400).json({ error: "missing id" });
+    const MODEL_ID = process.env.FAL_MODEL;
+    const FAL_KEY  = process.env.FAL_KEY || process.env.FAL_API_KEY;
 
-    const model = process.env.FAL_MODEL || "fal-ai/hunyuan-video";
-    const key = process.env.FAL_API_KEY;
-    if (!key) return res.status(500).json({ error: "Missing FAL_API_KEY" });
+    if (!id)        return res.status(400).json({ error: "missing id" });
+    if (!MODEL_ID)  return res.status(500).json({ error: "Missing FAL_MODEL" });
+    if (!FAL_KEY)   return res.status(500).json({ error: "Missing FAL_KEY" });
 
     // 1) สถานะ
-    const stRes = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}/status`, {
-      headers: { "Authorization": `Key ${key}`, "Accept": "application/json" }
+    const stRes = await fetch(`https://queue.fal.run/${encodeURIComponent(MODEL_ID)}/requests/${id}/status`, {
+      headers: { "Authorization": `Key ${FAL_KEY}`, "Accept": "application/json" }
     });
     const st = await readJsonSafe(stRes);
     if (!stRes.ok) {
@@ -30,8 +31,8 @@ export default async function handler(req, res) {
 
     if (st.json?.status === "COMPLETED") {
       // 2) ผลลัพธ์จริง
-      const rrRes = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}`, {
-        headers: { "Authorization": `Key ${key}`, "Accept": "application/json" }
+      const rrRes = await fetch(`https://queue.fal.run/${encodeURIComponent(MODEL_ID)}/requests/${id}`, {
+        headers: { "Authorization": `Key ${FAL_KEY}`, "Accept": "application/json" }
       });
       const rr = await readJsonSafe(rrRes);
       if (!rrRes.ok) {
@@ -42,8 +43,7 @@ export default async function handler(req, res) {
       const url =
         resp?.video?.url ||
         resp?.output?.video?.url ||
-        resp?.data?.video?.url ||
-        null;
+        resp?.data?.video?.url || null;
 
       if (!url) {
         console.error("[STATUS] no video url", rr.json);
@@ -52,7 +52,9 @@ export default async function handler(req, res) {
       return res.json({ done: true, url });
     }
 
-    if (st.json?.status === "FAILED") return res.status(500).json({ done: true, error: st.json?.error || "Fal job failed" });
+    if (st.json?.status === "FAILED") {
+      return res.status(500).json({ done: true, error: st.json?.error || "Fal job failed" });
+    }
     return res.json({ done: false, status: st.json?.status || "PENDING" });
   } catch (e) {
     console.error("[STATUS ERR]", e);
