@@ -15,12 +15,15 @@ export default async function handler(req, res) {
     const { briefTH, visualEN, negativeEN, duration, resolution, model } = req.body || {};
     if (!briefTH) return res.status(400).json({ error: "missing briefTH" });
 
-    const { OPENAI_API_KEY, FAL_API_KEY } = process.env;
-    if (!OPENAI_API_KEY || !FAL_API_KEY) {
-      return res.status(500).json({ error: "Missing OPENAI_API_KEY or FAL_API_KEY" });
-    }
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    const FAL_KEY = process.env.FAL_KEY || process.env.FAL_API_KEY; // รองรับทั้งสองชื่อ
+    const MODEL_ID = model || process.env.FAL_MODEL;                 // ต้องมี!
 
-    // ---------- 1) OpenAI: สร้างสคริปต์ + แคปชั่น ----------
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
+    if (!FAL_KEY)        return res.status(500).json({ error: "Missing FAL_KEY" });
+    if (!MODEL_ID)       return res.status(500).json({ error: "Missing FAL_MODEL (set it to the exact model path from Fal)" });
+
+    // ---------- 1) OpenAI: ทำสคริปต์ + แคปชั่น ----------
     const sys = "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ไทย 90-120 คำสำหรับคลิป 15-25 วิ และต่อท้ายด้วย 'แคปชั่น:' + แคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
     const oaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -36,13 +39,13 @@ export default async function handler(req, res) {
       console.error("[GEN] OpenAI HTTP", oaiRes.status, oai.ct, oai.text?.slice(0,200));
       return res.status(500).json({ error: `OpenAI ${oaiRes.status}: ${oai.json?.error?.message || oai.text}` });
     }
+
     const content = oai.json?.choices?.[0]?.message?.content || "";
     const parts = content.split(/แคปชั่น[:：]|Caption[:：]/i);
     const script = (parts[0] || content).trim();
     const caption = (parts[1] || "").trim();
 
-    // ---------- 2) Fal Queue: ส่งงานแบบ async ----------
-    const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video";
+    // ---------- 2) Fal Queue: ส่งงานแบบแนะนำ (ห่อใน input) ----------
     const visual = (visualEN || "clean product shot, 9:16 vertical, natural look").trim();
     const negative = (negativeEN || "").trim();
     const promptForVideo =
@@ -50,30 +53,28 @@ export default async function handler(req, res) {
       (negative ? `NEGATIVE (EN): ${negative}\n` : "") +
       `Thai brief: ${briefTH}\nScript (TH): ${script}`;
 
-    // หมายเหตุ: บางโมเดลบน Fal Queue คาดโครงสร้างเป็น top-level fields (ไม่ต้องห่อด้วย input)
-    const frames = Number(duration) >= 13 ? 129 : 85;  // map ระยะเวลาเป็นจำนวนเฟรม
-    const resSubmit = await fetch(`https://queue.fal.run/${encodeURIComponent(modelId)}`, {
+    const resSubmit = await fetch(`https://queue.fal.run/${encodeURIComponent(MODEL_ID)}`, {
       method: "POST",
       headers: {
-        "Authorization": `Key ${FAL_API_KEY}`,
+        "Authorization": `Key ${FAL_KEY}`,
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
       body: JSON.stringify({
-        prompt: promptForVideo,
-        aspect_ratio: "9:16",
-        resolution: (resolution === "1080x1920" ? "720p" : "720p"), // ใช้ 720p ก่อนเพื่อความเข้ากันได้
-        num_frames: frames
+        input: {
+          prompt: promptForVideo
+          // หมายเหตุ: โมเดลแต่ละตัวรองรับพารามิเตอร์ไม่เหมือนกัน
+          // ถ้าต้องการ ใส่เพิ่มที่นี่ เช่น aspect_ratio/duration/resolution ฯลฯ ตามหน้าโมเดล
+        }
       })
     });
-
     const sub = await readJsonSafe(resSubmit);
     if (!resSubmit.ok) {
       console.error("[GEN] Fal submit HTTP", resSubmit.status, sub.ct, sub.text?.slice(0,200));
       return res.status(500).json({ error: `Fal submit ${resSubmit.status}: ${sub.json?.detail || sub.text}` });
     }
     if (!sub.json?.request_id) {
-      console.error("[GEN] Fal submit unexpected body:", sub);
+      console.error("[GEN] Fal submit body unexpected:", sub);
       return res.status(500).json({ error: "Fal submit: missing request_id", raw: sub.text?.slice(0,200) });
     }
 
