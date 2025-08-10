@@ -1,63 +1,63 @@
-// /pages/api/generate.js
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
   try {
-    // ✅ โหลดแพ็กเกจแบบ dynamic และครอบทุกกรณีของ export
-    const mod = await import("@fal-ai/serverless-client");
-    const fal = mod.fal || mod.default || mod;
-
     const { briefTH, visualEN, negativeEN, duration, resolution, model } = req.body || {};
     if (!briefTH) return res.status(400).json({ error: "missing briefTH" });
 
     const { OPENAI_API_KEY, FAL_API_KEY } = process.env;
     if (!OPENAI_API_KEY || !FAL_API_KEY) {
-      return res.status(500).json({ error: "Server not configured: missing API keys" });
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY or FAL_API_KEY" });
     }
 
-    // --- OpenAI: ทำสคริปต์ไทย + แคปชั่น ---
-    const sys = "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ภาษาไทย 90-120 คำสำหรับคลิป 15-25 วินาที และต่อท้ายด้วยบรรทัด 'แคปชั่น:' พร้อมแคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
+    // 1) ทำสคริปต์ไทย + แคปชั่น
+    const sys = "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ไทย 90-120 คำสำหรับคลิป 15-25 วิ และต่อท้ายด้วย 'แคปชั่น:' + แคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: briefTH }
-        ],
+        messages: [{ role: "system", content: sys }, { role: "user", content: briefTH }],
         temperature: 0.8
       })
     });
     const j = await r.json();
-    if (!r.ok) return res.status(500).json({ error: `OpenAI: ${j.error?.message || "failed"}` });
+    if (!r.ok) return res.status(500).json({ error: `OpenAI: ${j?.error?.message || r.statusText}` });
 
     const content = j?.choices?.[0]?.message?.content || "";
     const parts = content.split(/แคปชั่น[:：]|Caption[:：]/i);
     const script = (parts[0] || content).trim();
     const caption = (parts[1] || "").trim();
 
-    // --- Fal: ส่งงานแบบ async ---
-    fal.config({ credentials: FAL_API_KEY });
-    const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video";
-
-    const visual = (visualEN || "").trim();
+    // 2) เตรียม prompt สำหรับวิดีโอ (ภาษาอังกฤษ + คำสั่งไทยประกอบ)
+    const visual = (visualEN || "clean product shot, 9:16 vertical, natural look").trim();
     const negative = (negativeEN || "").trim();
     const promptForVideo =
-      `VISUAL (EN): ${visual || "clean product shot, 9:16 vertical, natural look"}\n` +
+      `VISUAL (EN): ${visual}\n` +
       (negative ? `NEGATIVE (EN): ${negative}\n` : "") +
       `Thai brief: ${briefTH}\nScript (TH): ${script}`;
 
-    const job = await fal.jobs.submit(modelId, {
-      input: {
+    // 3) เรียก Fal Queue REST API (ไม่ต้องใช้ไลบรารี)
+    const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video"; // e.g. fal-ai/hunyuan-video
+    const frames = Number(duration) >= 13 ? 129 : 85; // map sec → frames (รุ่นนี้รับ 85/129 เฟรม) :contentReference[oaicite:2]{index=2}
+    const resSubmit = await fetch(`https://queue.fal.run/${encodeURIComponent(modelId)}`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Key ${FAL_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
         prompt: promptForVideo,
-        ratio: "9:16",
-        duration: Number(duration) || 12,
-        resolution: resolution || "720x1280"
-      }
+        aspect_ratio: "9:16",
+        resolution: (resolution === "1080x1920" ? "720p" : "720p"), // รุ่นนี้รองรับ 480p/580p/720p
+        num_frames: frames
+      })
     });
+    const submitJson = await resSubmit.json();
+    if (!resSubmit.ok) return res.status(500).json({ error: `Fal submit: ${submitJson?.detail || resSubmit.statusText}` });
 
-    return res.json({ ok: true, jobId: job.request_id, script, caption });
+    return res.json({ ok: true, jobId: submitJson.request_id, script, caption });
   } catch (e) {
+    console.error("GEN ERR:", e);
     return res.status(500).json({ error: e?.message || "generate failed" });
   }
 }
