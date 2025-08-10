@@ -1,24 +1,35 @@
-// /pages/api/fal-status.js
 export default async function handler(req, res) {
   try {
-    const mod = await import("@fal-ai/serverless-client");
-    const fal = mod.fal || mod.default || mod;
-
     const { id } = req.query || {};
     if (!id) return res.status(400).json({ error: "missing id" });
 
-    fal.config({ credentials: process.env.FAL_API_KEY });
     const model = process.env.FAL_MODEL || "fal-ai/hunyuan-video";
+    const key = process.env.FAL_API_KEY;
+    if (!key) return res.status(500).json({ error: "Missing FAL_API_KEY" });
 
-    const job = await fal.jobs.get(model, id);
-    const status = job?.status || job?.state || "PENDING";
-    const output = job?.response?.output || job?.output;
-    const videoUrl = output?.video?.url || output?.[0]?.url || output?.url || null;
+    // 1) เช็กสถานะ
+    const st = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}/status`, {
+      headers: { "Authorization": `Key ${key}` }
+    }).then(r => r.json());
 
-    if (status === "COMPLETED" && videoUrl) return res.json({ done: true, url: videoUrl });
-    if (status === "FAILED") return res.status(500).json({ done: true, error: job?.error || "Fal job failed" });
-    return res.json({ done: false, status });
+    if (st?.status === "COMPLETED") {
+      // 2) ดึงผลลัพธ์จริง
+      const rr = await fetch(`https://queue.fal.run/${encodeURIComponent(model)}/requests/${id}`, {
+        headers: { "Authorization": `Key ${key}` }
+      }).then(r => r.json());
+
+      const resp = rr?.response || rr;
+      const url =
+        resp?.video?.url || resp?.output?.video?.url || resp?.data?.video?.url || null; // ตาม schema ของ Hunyuan มี video.url :contentReference[oaicite:3]{index=3}
+
+      if (!url) return res.status(500).json({ done: true, error: "No video url in response" });
+      return res.json({ done: true, url });
+    }
+
+    if (st?.status === "FAILED") return res.status(500).json({ done: true, error: st?.error || "Fal job failed" });
+    return res.json({ done: false, status: st?.status || "PENDING" });
   } catch (e) {
+    console.error("STATUS ERR:", e);
     return res.status(500).json({ error: e?.message || "status failed" });
   }
 }
