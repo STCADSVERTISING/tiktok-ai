@@ -1,6 +1,5 @@
 // /pages/api/generate.js
-- import { fal } from "@fal-ai/serverless-client";
-+ import fal from "@fal-ai/serverless-client";
+import fal from "@fal-ai/serverless-client";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
@@ -13,7 +12,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Server not configured: missing API keys" });
     }
 
-    // 1) ให้ OpenAI ช่วยสรุปสคริปต์ไทย + แคปชั่น (สั้น กระชับ)
+    // สร้างสคริปต์ไทย + แคปชั่นด้วย OpenAI
     const sys =
       "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ภาษาไทย 90-120 คำสำหรับคลิป 15-25 วินาที และต่อท้ายด้วยบรรทัด 'แคปชั่น:' พร้อมแคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -36,18 +35,17 @@ export default async function handler(req, res) {
     const script = (parts[0] || content).trim();
     const caption = (parts[1] || "").trim();
 
-    // 2) สร้าง “Visual Prompt ภาษาอังกฤษ” + Negative เป็นข้อความเดียวกันให้โมเดลวิดีโอเข้าใจง่าย
+    // รวม Visual/Negative (EN) ลงใน prompt เดียว ใช้ได้กับทุกโมเดล
     const visual = (visualEN || "").trim();
     const negative = (negativeEN || "").trim();
     const promptForVideo =
       `VISUAL (EN): ${visual || "clean product shot, 9:16 vertical, natural look"}\n` +
       (negative ? `NEGATIVE (EN): ${negative}\n` : "") +
-      `Thai brief: ${briefTH}`;
+      `Thai brief: ${briefTH}\nScript (TH): ${script}`;
 
-    // 3) ส่งงานไป Fal แบบ async (ไม่รอจนเสร็จ)
+    // ส่งงานให้ Fal แบบ async
     fal.config({ credentials: FAL_API_KEY });
     const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video";
-
     const job = await fal.jobs.submit(modelId, {
       input: {
         prompt: promptForVideo,
