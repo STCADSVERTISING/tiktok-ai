@@ -1,9 +1,11 @@
 // /pages/api/generate.js
-import fal from "@fal-ai/serverless-client";
-
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
   try {
+    // ✅ โหลดแพ็กเกจแบบ dynamic และครอบทุกกรณีของ export
+    const mod = await import("@fal-ai/serverless-client");
+    const fal = mod.fal || mod.default || mod;
+
     const { briefTH, visualEN, negativeEN, duration, resolution, model } = req.body || {};
     if (!briefTH) return res.status(400).json({ error: "missing briefTH" });
 
@@ -12,9 +14,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Server not configured: missing API keys" });
     }
 
-    // สร้างสคริปต์ไทย + แคปชั่นด้วย OpenAI
-    const sys =
-      "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ภาษาไทย 90-120 คำสำหรับคลิป 15-25 วินาที และต่อท้ายด้วยบรรทัด 'แคปชั่น:' พร้อมแคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
+    // --- OpenAI: ทำสคริปต์ไทย + แคปชั่น ---
+    const sys = "คุณเป็นครีเอทีฟ TikTok: เขียนสคริปต์ภาษาไทย 90-120 คำสำหรับคลิป 15-25 วินาที และต่อท้ายด้วยบรรทัด 'แคปชั่น:' พร้อมแคปชั่น 1 บรรทัด + 5 แฮชแท็ก";
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -35,7 +36,10 @@ export default async function handler(req, res) {
     const script = (parts[0] || content).trim();
     const caption = (parts[1] || "").trim();
 
-    // รวม Visual/Negative (EN) ลงใน prompt เดียว ใช้ได้กับทุกโมเดล
+    // --- Fal: ส่งงานแบบ async ---
+    fal.config({ credentials: FAL_API_KEY });
+    const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video";
+
     const visual = (visualEN || "").trim();
     const negative = (negativeEN || "").trim();
     const promptForVideo =
@@ -43,9 +47,6 @@ export default async function handler(req, res) {
       (negative ? `NEGATIVE (EN): ${negative}\n` : "") +
       `Thai brief: ${briefTH}\nScript (TH): ${script}`;
 
-    // ส่งงานให้ Fal แบบ async
-    fal.config({ credentials: FAL_API_KEY });
-    const modelId = model || process.env.FAL_MODEL || "fal-ai/hunyuan-video";
     const job = await fal.jobs.submit(modelId, {
       input: {
         prompt: promptForVideo,
